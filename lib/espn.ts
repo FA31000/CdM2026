@@ -28,6 +28,7 @@ export type EspnEvent = {
   date: string;
   name?: string;
   shortName?: string;
+  season?: { year?: number; type?: number; slug?: string };
   status: {
     type: { state: string; completed: boolean; shortDetail: string; name: string };
   };

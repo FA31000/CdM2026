@@ -107,7 +107,7 @@ export function computeStandings(events: EspnEvent[]): Standings {
     const status: Match["status"] = completed ? "final" : state === "in" ? "live" : "scheduled";
 
     const noteHeadline = comp.notes?.[0]?.headline ?? "";
-    const compSlug = comp.type?.slug ?? "";
+    const compSlug = comp.type?.slug ?? ev.season?.slug ?? "";
     const isKnockout = compSlug !== "" && compSlug !== "group-stage";
     const statusName = ev.status?.type?.name ?? "";
     const shortDetail = ev.status?.type?.shortDetail ?? "";
