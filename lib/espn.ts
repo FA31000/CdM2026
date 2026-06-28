@@ -29,9 +29,14 @@ export type EspnEvent = {
   name?: string;
   shortName?: string;
   status: {
-    type: { state: string; completed: boolean; shortDetail: string };
+    type: { state: string; completed: boolean; shortDetail: string; name: string };
   };
-  competitions: { competitors: EspnCompetitor[]; odds?: EspnOdds[] }[];
+  competitions: {
+    competitors: EspnCompetitor[];
+    odds?: EspnOdds[];
+    notes?: { type: string; headline: string }[];
+    type?: { id?: string; slug?: string };
+  }[];
 };
 
 export async function fetchEvents(): Promise<EspnEvent[]> {

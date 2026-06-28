@@ -17,6 +17,9 @@ export type Match = {
   date: string;
   status: "final" | "live" | "scheduled";
   statusDetail: string;
+  round: string;
+  isKnockout: boolean;
+  knockoutResult: "regular" | "aet" | "penalties" | null;
   home: MatchSide;
   away: MatchSide;
 };
@@ -49,8 +52,6 @@ export type Standings = {
   teams: TeamStanding[];
   matches: Match[];
 };
-
-type Outcome = "win" | "draw" | "loss";
 
 function sideFrom(c: { team: { abbreviation: string; displayName: string; logo?: string }; score: string }): MatchSide {
   const code = c.team.abbreviation;
@@ -105,11 +106,21 @@ export function computeStandings(events: EspnEvent[]): Standings {
     const state = ev.status?.type?.state; // "pre" | "in" | "post"
     const status: Match["status"] = completed ? "final" : state === "in" ? "live" : "scheduled";
 
+    const noteHeadline = comp.notes?.[0]?.headline ?? "";
+    const compSlug = comp.type?.slug ?? "";
+    const isKnockout = compSlug !== "" && compSlug !== "group-stage";
+    const statusName = ev.status?.type?.name ?? "";
+    const shortDetail = ev.status?.type?.shortDetail ?? "";
+    const knockoutResult = isKnockout && completed ? detectKnockoutResult(statusName, shortDetail) : null;
+
     matches.push({
       id: ev.id,
       date: ev.date,
       status,
-      statusDetail: ev.status?.type?.shortDetail ?? "",
+      statusDetail: shortDetail,
+      round: toFrenchRound(noteHeadline, compSlug),
+      isKnockout,
+      knockoutResult,
       home,
       away,
     });
@@ -118,8 +129,8 @@ export function computeStandings(events: EspnEvent[]): Standings {
 
     // Decide the result: trust ESPN's winner flag first (handles penalty
     // shootouts in knockouts), otherwise fall back to comparing scores.
-    let homeOutcome: Outcome;
-    let awayOutcome: Outcome;
+    let homeOutcome: "win" | "draw" | "loss";
+    let awayOutcome: "win" | "draw" | "loss";
     if (homeC.winner === true) {
       homeOutcome = "win";
       awayOutcome = "loss";
@@ -137,8 +148,22 @@ export function computeStandings(events: EspnEvent[]): Standings {
       awayOutcome = "draw";
     }
 
-    applyOutcome(home, homeOutcome, players, teams);
-    applyOutcome(away, awayOutcome, players, teams);
+    if (isKnockout && knockoutResult === "penalties") {
+      // Penalty shootout: 1 point each, regardless of who wins
+      applyPoints(home, 1, "draw", players, teams);
+      applyPoints(away, 1, "draw", players, teams);
+    } else if (isKnockout && knockoutResult === "aet") {
+      // Extra time win: winner 2, loser 1
+      const homeWon = homeC.winner === true;
+      applyPoints(home, homeWon ? 2 : 1, homeWon ? "win" : "loss", players, teams);
+      applyPoints(away, homeWon ? 1 : 2, homeWon ? "loss" : "win", players, teams);
+    } else {
+      // Group stage or regular-time knockout win: 3/1/0
+      const homePoints = homeOutcome === "win" ? 3 : homeOutcome === "draw" ? 1 : 0;
+      const awayPoints = awayOutcome === "win" ? 3 : awayOutcome === "draw" ? 1 : 0;
+      applyPoints(home, homePoints, homeOutcome, players, teams);
+      applyPoints(away, awayPoints, awayOutcome, players, teams);
+    }
   }
 
   // Points per game is fairer than total points: on any given day players have
@@ -167,19 +192,33 @@ export function computeStandings(events: EspnEvent[]): Standings {
   };
 }
 
-function applyOutcome(
+function toFrenchRound(headline: string, slug = ""): string {
+  const src = headline || slug;
+  if (!src) return "";
+  const h = src.toLowerCase();
+  if (h.includes("group")) return headline ? headline.replace(/group/i, "Groupe") : "Phase de groupes";
+  if (h.includes("round-of-32") || h.includes("round of 32")) return "Huitième de finale";
+  if (h.includes("round of 16") || h.includes("round of sixteen") || h.includes("round-of-16")) return "Huitième de finale";
+  if (h.includes("quarterfinal") || h.includes("quarter-final") || h.includes("quarter-finals")) return "Quart de finale";
+  if (h.includes("semifinal") || h.includes("semi-final") || h.includes("semi-finals")) return "Demi-finale";
+  if (h.includes("third place") || h.includes("3rd place")) return "Troisième place";
+  if (h.includes("final")) return "Finale";
+  return headline || slug;
+}
+
+function applyPoints(
   side: MatchSide,
-  outcome: Outcome,
+  points: number,
+  stat: "win" | "draw" | "loss",
   players: Map<Player, PlayerStanding>,
   teams: Map<string, TeamStanding>,
 ) {
-  const points = outcome === "win" ? 3 : outcome === "draw" ? 1 : 0;
   const team = teams.get(side.code);
   if (team) {
     team.played += 1;
     team.points += points;
-    if (outcome === "win") team.wins += 1;
-    else if (outcome === "draw") team.draws += 1;
+    if (stat === "win") team.wins += 1;
+    else if (stat === "draw") team.draws += 1;
     else team.losses += 1;
   }
   for (const owner of side.owners) {
@@ -187,8 +226,16 @@ function applyOutcome(
     if (!p) continue;
     p.played += 1;
     p.points += points;
-    if (outcome === "win") p.wins += 1;
-    else if (outcome === "draw") p.draws += 1;
+    if (stat === "win") p.wins += 1;
+    else if (stat === "draw") p.draws += 1;
     else p.losses += 1;
   }
+}
+
+function detectKnockoutResult(name: string, shortDetail: string): "regular" | "aet" | "penalties" {
+  const n = name.toLowerCase();
+  const s = shortDetail.toLowerCase();
+  if (n.includes("pen") || s.includes("pen") || s.includes("pks")) return "penalties";
+  if (n.includes("aet") || s.includes("et") || s.includes("extra")) return "aet";
+  return "regular";
 }

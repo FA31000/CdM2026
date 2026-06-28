@@ -2,26 +2,23 @@
 
 import { useState } from "react";
 import { useStandings } from "@/lib/useStandings";
-import { Leaderboard, type SortMode } from "@/components/Leaderboard";
+import { Leaderboard } from "@/components/Leaderboard";
 import { Matches } from "@/components/Matches";
 import { Players } from "@/components/Players";
 import { Projection } from "@/components/Projection";
-import { Roast } from "@/components/Roast";
 import { formatUpdated } from "@/lib/ui";
 
-type Tab = "classement" | "matchs" | "joueurs" | "projection" | "roast";
+type Tab = "classement" | "matchs" | "joueurs" | "projection";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "classement", label: "Classement" },
   { id: "matchs", label: "Matchs" },
   { id: "joueurs", label: "Joueurs" },
   { id: "projection", label: "📈 Projection" },
-  { id: "roast", label: "🔥 Roast" },
 ];
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("classement");
-  const [sortMode, setSortMode] = useState<SortMode>("ppg");
   const { data, isLoading, isError, isFetching, refetch } = useStandings();
 
   return (
@@ -76,38 +73,13 @@ export default function Home() {
           </div>
         )}
         {data && tab === "classement" && (
-          <div className="flex flex-col gap-3">
-            <div className="flex gap-1 rounded-full bg-gray-200/70 p-1">
-              <button
-                onClick={() => setSortMode("ppg")}
-                className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                  sortMode === "ppg"
-                    ? "bg-white text-emerald-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Points / match
-              </button>
-              <button
-                onClick={() => setSortMode("points")}
-                className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                  sortMode === "points"
-                    ? "bg-white text-emerald-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                Points totaux
-              </button>
-            </div>
-            <Leaderboard players={data.players} mode={sortMode} />
-          </div>
+          <Leaderboard players={data.players} mode="points" />
         )}
         {data && tab === "matchs" && <Matches matches={data.matches} />}
         {data && tab === "joueurs" && (
           <Players players={data.players} teams={data.teams} matches={data.matches} />
         )}
         {tab === "projection" && <Projection />}
-        {tab === "roast" && <Roast active={tab === "roast"} />}
       </div>
     </main>
   );

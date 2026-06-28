@@ -55,7 +55,12 @@ function MatchCard({ m }: { m: Match }) {
   return (
     <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
       <div className="mb-2 flex items-center justify-between text-xs">
-        <span className="text-gray-400">{dateLabel}</span>
+        <span className="text-gray-400">
+          {dateLabel}
+          {m.round && (
+            <span className="ml-2 text-gray-400">· {m.round}</span>
+          )}
+        </span>
         {m.status === "live" && (
           <span className="flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 font-semibold text-red-600">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />

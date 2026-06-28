@@ -84,9 +84,6 @@ export function Leaderboard({
                   <div className="-mt-1 text-xs uppercase tracking-wide text-gray-400">
                     pts
                   </div>
-                  <div className="mt-0.5 text-xs text-gray-400">
-                    {p.ppg.toFixed(2)} pts/match
-                  </div>
                 </>
               )}
             </div>

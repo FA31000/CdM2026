@@ -276,12 +276,14 @@ export function computeProjection(events: EspnEvent[]): Projection {
       expectedPpg: expectedGames > 0 ? round2(expectedPoints / expectedGames) : 0,
       rank: 0,
     };
-  })
-    .sort((a, b) => b.expectedPpg - a.expectedPpg || b.expectedPoints - a.expectedPoints)
-    .map((p, i, arr) => ({
-      ...p,
-      rank: i === 0 ? 1 : arr[i - 1].expectedPpg === p.expectedPpg ? arr[i - 1].rank : i + 1,
-    }));
+  }).sort(
+    (a, b) => b.expectedPpg - a.expectedPpg || b.expectedPoints - a.expectedPoints,
+  );
+  // Assign ranks, letting ties share a rank.
+  players.forEach((p, i) => {
+    p.rank =
+      i === 0 ? 1 : players[i - 1].expectedPpg === p.expectedPpg ? players[i - 1].rank : i + 1;
+  });
 
   // ---- timeline -----------------------------------------------------------
   const timeline = buildTimeline(groupMatches, knockoutDates, roundPointsSum, mean);

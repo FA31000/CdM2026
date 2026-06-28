@@ -14,10 +14,14 @@ online source — no manual entry, no logins.
 - Results source: ESPN free endpoint `soccer/fifa.world/scoreboard` (no API key)
 
 ## Scoring rules
-- Win = 3, Draw = 1, Loss = 0 — applied per owned team, per match.
+- **Group stage**: Win = 3, Draw = 1, Loss = 0.
+- **Knockout games** (Round of 32 onwards):
+  - Regular-time win: winner 3, loser 0.
+  - Extra-time win: winner 2, loser 1.
+  - Penalty shootout: 1 point each, regardless of who wins the shootout.
 - A team can be owned by several players; all its owners score when it wins/draws.
 - Unowned teams (Haiti, Curaçao, Iraq, …) award no points.
-- Knockout: ESPN's marked winner gets 3 (penalty-shootout winners count as a win).
+- Detected automatically from ESPN's `status.type` field (`FT`, `FT-ET`, `FT-Pens`).
 - **Ranking is by points per game (PPG = total points ÷ matches played) by default**,
   fairer because players have different numbers of games played on any given day.
   Tiebreakers: total points, then wins. A player with 0 games sits at 0.
@@ -43,8 +47,9 @@ online source — no manual entry, no logins.
   Verified: each player owns exactly 7 teams (49 slots, 45 distinct).
 - **Phase 3 — Standings engine**:
   - `lib/espn.ts` — `fetchEvents()` pulls the full tournament from ESPN (cached 2 min).
-  - `lib/standings.ts` — `computeStandings()` applies win=3/draw=1, uses ESPN's winner
-    flag (handles penalty shootouts), builds player + team standings and a match list.
+  - `lib/standings.ts` — `computeStandings()` applies group-stage scoring (3/1/0) and
+    knockout scoring (3/0 regular, 2/1 AET, 1/1 penalties), detected from ESPN's status
+    field. Builds player + team standings and a match list.
     Players are ranked by points per game (`ppg`), then total points, then wins.
   - `app/api/standings/route.ts` — GET endpoint returning the computed standings JSON.
   - Verified against the Excel: 5/7 players match exactly; the 2 differences are
@@ -82,6 +87,31 @@ online source — no manual entry, no logins.
   - `components/Roast.tsx` — colour-coded roast cards + "Roaste-les encore 🔥" button.
   - Wired into the Roast tab in `app/page.tsx`.
   - `ANTHROPIC_API_KEY` stored in `worldcup-26/.env.local` (git-ignored).
+
+- **Phase 7 — Projection page** (a 5th tab, "📈 Projection"):
+  - `lib/elo.ts` — approximate World Football Elo seeds for the 48 teams, an
+    Elo→win/draw/loss probability model, and an Elo update from finished games.
+  - `lib/espn.ts` — types extended to expose ESPN's betting `odds` (DraftKings
+    moneylines) plus event `name`/`shortName`.
+  - `lib/projection.ts` — `computeProjection()`:
+    - Known matchups (group stage) use **real bookmaker odds** (home/draw/away
+      moneylines de-vigged into probabilities); hypothetical knockout matchups
+      use **Elo** strength.
+    - **Monte Carlo** (5 000 runs): plays the groups, qualifies the top 2 of each
+      of the 12 groups + the 8 best 3rd-placed teams (Round of 32), then seeds the
+      32 survivors by Elo and runs a re-seeded knockout bracket incl. the 3rd-place
+      match. Averages give each team's expected points, qualify %, finish
+      distribution, and each player's projected final total + PPG.
+    - **Over/under**: actual points earned so far vs. what the odds implied
+      ("luck"), per team and per player.
+    - **Timeline**: per-player cumulative points across the tournament dates —
+      actual for played games, expected (dotted) for future ones.
+  - `app/api/projection/route.ts` — GET endpoint (cached 2 min).
+  - `lib/useProjection.ts` — `useProjection()` hook.
+  - `components/Projection.tsx` — methodology note, hand-drawn **SVG line chart**
+    (one line per player, solid→dotted at the projection boundary), projected
+    final standings cards, and a per-team projection list.
+  - Wired into the new Projection tab in `app/page.tsx`.
 
 ### Planned (not yet built)
 - **Phase 6 — Deploy** to Vercel with `ANTHROPIC_API_KEY` set in the project's env vars.
