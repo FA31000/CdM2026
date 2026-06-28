@@ -108,7 +108,9 @@ export function computeStandings(events: EspnEvent[]): Standings {
 
     const noteHeadline = comp.notes?.[0]?.headline ?? "";
     const compSlug = comp.type?.slug ?? ev.season?.slug ?? "";
-    const isKnockout = compSlug !== "" && compSlug !== "group-stage";
+    const round = toFrenchRound(noteHeadline, compSlug);
+    const KNOCKOUT_ROUNDS = new Set(["Seizième de finale", "Huitième de finale", "Quart de finale", "Demi-finale", "Finale", "Troisième place"]);
+    const isKnockout = KNOCKOUT_ROUNDS.has(round) || (compSlug !== "" && compSlug !== "group-stage");
     const statusName = ev.status?.type?.name ?? "";
     const shortDetail = ev.status?.type?.shortDetail ?? "";
     const knockoutResult = isKnockout && completed ? detectKnockoutResult(statusName, shortDetail) : null;
@@ -118,7 +120,7 @@ export function computeStandings(events: EspnEvent[]): Standings {
       date: ev.date,
       status,
       statusDetail: shortDetail,
-      round: toFrenchRound(noteHeadline, compSlug),
+      round,
       isKnockout,
       knockoutResult,
       home,
