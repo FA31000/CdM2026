@@ -6,14 +6,16 @@ import { Leaderboard } from "@/components/Leaderboard";
 import { Matches } from "@/components/Matches";
 import { Players } from "@/components/Players";
 import { Projection } from "@/components/Projection";
+import { Brackets } from "@/components/Brackets";
 import { formatUpdated } from "@/lib/ui";
 
-type Tab = "classement" | "matchs" | "joueurs" | "projection";
+type Tab = "classement" | "matchs" | "joueurs" | "tableau" | "projection";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "classement", label: "Classement" },
   { id: "matchs", label: "Matchs" },
   { id: "joueurs", label: "Joueurs" },
+  { id: "tableau", label: "🏆 Tableau" },
   { id: "projection", label: "📈 Projection" },
 ];
 
@@ -48,12 +50,12 @@ export default function Home() {
       </header>
 
       {/* Tabs */}
-      <nav className="sticky top-0 z-10 flex gap-1 border-b border-gray-200 bg-gray-50/95 px-3 py-2 backdrop-blur">
+      <nav className="sticky top-0 z-10 flex gap-1 overflow-x-auto border-b border-gray-200 bg-gray-50/95 px-3 py-2 backdrop-blur scrollbar-none">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition ${
+            className={`flex-shrink-0 rounded-full px-3 py-2 text-sm font-medium transition ${
               tab === t.id
                 ? "bg-emerald-700 text-white"
                 : "text-gray-500 hover:bg-gray-200/60"
@@ -79,6 +81,7 @@ export default function Home() {
         {data && tab === "joueurs" && (
           <Players players={data.players} teams={data.teams} matches={data.matches} />
         )}
+        {data && tab === "tableau" && <Brackets matches={data.matches} />}
         {tab === "projection" && <Projection />}
       </div>
     </main>

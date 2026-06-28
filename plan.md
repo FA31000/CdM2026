@@ -113,5 +113,16 @@ online source — no manual entry, no logins.
     final standings cards, and a per-team projection list.
   - Wired into the new Projection tab in `app/page.tsx`.
 
+- **Phase 8 — Brackets tab** ("🏆 Tableau"):
+  - `components/Brackets.tsx` — horizontal knockout bracket. Filters `isKnockout` matches
+    from the standings data (no extra API call), groups by round, and displays as scrollable
+    columns left-to-right: 32e → 16e → Quarts → Demis → Finale.
+  - Team names are coloured by owner (same `PLAYER_COLOR` palette as the rest of the app).
+    Winner is highlighted in emerald; AET/penalties shown as a small label under the match.
+    TBD shown in italic gray for slots not yet determined.
+  - Tab bar updated to scrollable (overflow-x-auto + flex-shrink-0 buttons) to fit 5 tabs.
+  - Fixed `toFrenchRound` in `lib/standings.ts`: Round of 32 now correctly maps to
+    "Seizième de finale" (was incorrectly "Huitième de finale").
+
 ### Planned (not yet built)
 - **Phase 6 — Deploy** to Vercel with `ANTHROPIC_API_KEY` set in the project's env vars.

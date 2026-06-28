@@ -107,7 +107,7 @@ export function computeStandings(events: EspnEvent[]): Standings {
     const status: Match["status"] = completed ? "final" : state === "in" ? "live" : "scheduled";
 
     const noteHeadline = comp.notes?.[0]?.headline ?? "";
-    const compSlug = comp.type?.slug ?? "";
+    const compSlug = comp.type?.slug ?? ev.season?.slug ?? "";
     const isKnockout = compSlug !== "" && compSlug !== "group-stage";
     const statusName = ev.status?.type?.name ?? "";
     const shortDetail = ev.status?.type?.shortDetail ?? "";
@@ -197,7 +197,7 @@ function toFrenchRound(headline: string, slug = ""): string {
   if (!src) return "";
   const h = src.toLowerCase();
   if (h.includes("group")) return headline ? headline.replace(/group/i, "Groupe") : "Phase de groupes";
-  if (h.includes("round-of-32") || h.includes("round of 32")) return "Huitième de finale";
+  if (h.includes("round-of-32") || h.includes("round of 32")) return "Seizième de finale";
   if (h.includes("round of 16") || h.includes("round of sixteen") || h.includes("round-of-16")) return "Huitième de finale";
   if (h.includes("quarterfinal") || h.includes("quarter-final") || h.includes("quarter-finals")) return "Quart de finale";
   if (h.includes("semifinal") || h.includes("semi-final") || h.includes("semi-finals")) return "Demi-finale";
