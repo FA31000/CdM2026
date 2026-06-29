@@ -5,13 +5,13 @@ import type { Finish, TeamProjection } from "@/lib/projection";
 import { PLAYER_COLOR, RANK_MEDAL } from "@/lib/ui";
 
 const FINISH_LABEL: Record<Finish, string> = {
-  champion: "🏆 Vainqueur",
-  final: "Finaliste",
-  sf: "Demi-finale",
-  qf: "Quart de finale",
-  r16: "8es de finale",
-  r32: "16es de finale",
-  groups: "Phase de groupes",
+  champion: "🏆 Gagne la finale",
+  final: "Perd en finale",
+  sf: "Perd en demi-finale",
+  qf: "Perd en quart de finale",
+  r16: "Perd en 8es de finale",
+  r32: "Perd en 16es de finale",
+  groups: "Éliminé en phase de groupes",
 };
 
 export function Projection() {

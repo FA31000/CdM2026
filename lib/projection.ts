@@ -1,6 +1,7 @@
 // Projects the rest of the World Cup with a Monte Carlo simulation.
 //
 // - Known matchups (group stage) use real ESPN/DraftKings odds.
+// - Known knockout matchups use real ESPN/DraftKings odds.
 // - Hypothetical knockout matchups use free Elo strength ratings.
 // We simulate the whole tournament thousands of times: play the groups, decide
 // who advances (top 2 + 8 best 3rd places), seed the 32 survivors by strength
@@ -39,7 +40,7 @@ export type TeamProjection = {
   expectedGames: number; // mean matches played
   qualifyProb: number; // chance of reaching the knockout stage
   finishProbs: Record<Finish, number>;
-  expectedFinish: Finish; // most likely finishing bucket
+  expectedFinish: Finish; // median finishing bucket
 };
 
 export type PlayerProjection = {
@@ -111,6 +112,15 @@ type GroupMatch = {
   probs?: Probs; // home perspective
 };
 
+type KnockoutMatch = {
+  home: string;
+  away: string;
+  round: Round;
+  completed: boolean;
+  winner?: string; // set when completed
+  probs?: Probs;   // set when pending (from ESPN odds or Elo)
+};
+
 function competitorIsReal(name: string, abbr: string): boolean {
   if (!abbr || abbr.length > 3) return false;
   return !/(Winner|Loser|Place|Group)/.test(name);
@@ -132,76 +142,141 @@ function knockoutRound(names: string[]): Round {
 export function computeProjection(events: EspnEvent[]): Projection {
   const elo: Record<string, number> = {};
 
-  const groupMatches: GroupMatch[] = [];
+  // ---- Pass 1: seed Elo, build opponent map, collect placeholder KO dates ---
+  const allOpponents: Record<string, Set<string>> = {};
   const knockoutDates: Record<Round, string[]> = {
     r32: [], r16: [], qf: [], sf: [], third: [], final: [],
   };
-  // Per-team actual / expected points from completed games (for the luck stat).
-  const actualSoFar: Record<string, number> = {};
-  const expectedSoFar: Record<string, number> = {};
 
-  // First pass: seed Elo for every team that appears.
   for (const ev of events) {
     const comp = ev.competitions?.[0];
     if (!comp) continue;
+    // Seed Elo for every real team in the event.
     for (const c of comp.competitors) {
       const ab = c.team.abbreviation;
       if (competitorIsReal(c.team.displayName, ab) && elo[ab] == null) {
         elo[ab] = seedElo(ab);
       }
     }
+    if (comp.competitors.length < 2) continue;
+    const homeC = comp.competitors.find((c) => c.homeAway === "home") ?? comp.competitors[0];
+    const awayC = comp.competitors.find((c) => c.homeAway === "away") ?? comp.competitors[1];
+    const homeReal = competitorIsReal(homeC.team.displayName, homeC.team.abbreviation);
+    const awayReal = competitorIsReal(awayC.team.displayName, awayC.team.abbreviation);
+
+    if (homeReal && awayReal) {
+      // Both teams known: build the opponent map for group detection.
+      const h = homeC.team.abbreviation;
+      const a = awayC.team.abbreviation;
+      (allOpponents[h] ??= new Set()).add(a);
+      (allOpponents[a] ??= new Set()).add(h);
+    } else {
+      // At least one placeholder: record the round date.
+      const names = comp.competitors.map((c) => c.team.displayName);
+      knockoutDates[knockoutRound(names)].push(ev.date);
+    }
   }
 
-  // Second pass: classify matches and nudge Elo from completed results.
+  // Two teams are in the same group if they share a common opponent (3-team round-robin).
+  const sameGroup = (h: string, a: string): boolean => {
+    const ho = allOpponents[h] ?? new Set<string>();
+    const ao = allOpponents[a] ?? new Set<string>();
+    for (const o of ho) if (ao.has(o)) return true;
+    return false;
+  };
+
+  // Infer the knockout round of a real-team match from its date relative to
+  // the placeholder round date ranges collected above.
+  const roundOrder: Round[] = ["r32", "r16", "qf", "sf", "third", "final"];
+  const roundMinDate: Partial<Record<Round, string>> = {};
+  for (const r of roundOrder) {
+    const sorted = knockoutDates[r].map((d) => d.slice(0, 10)).sort();
+    if (sorted.length > 0) roundMinDate[r] = sorted[0];
+  }
+  function inferRound(date: string): Round {
+    const day = date.slice(0, 10);
+    let result: Round = "r32";
+    for (const r of roundOrder) {
+      const min = roundMinDate[r];
+      if (min && day >= min) result = r;
+    }
+    return result;
+  }
+
+  // ---- Pass 2: classify and record all matches -----------------------------
+  const groupMatches: GroupMatch[] = [];
+  const knockoutMatches: KnockoutMatch[] = [];
+  const actualSoFar: Record<string, number> = {};
+  const expectedSoFar: Record<string, number> = {};
+
   for (const ev of events) {
     const comp = ev.competitions?.[0];
     if (!comp || comp.competitors.length < 2) continue;
     const homeC = comp.competitors.find((c) => c.homeAway === "home") ?? comp.competitors[0];
     const awayC = comp.competitors.find((c) => c.homeAway === "away") ?? comp.competitors[1];
-    const names = comp.competitors.map((c) => c.team.displayName);
-    const realMatch =
-      competitorIsReal(homeC.team.displayName, homeC.team.abbreviation) &&
-      competitorIsReal(awayC.team.displayName, awayC.team.abbreviation);
+    const homeReal = competitorIsReal(homeC.team.displayName, homeC.team.abbreviation);
+    const awayReal = competitorIsReal(awayC.team.displayName, awayC.team.abbreviation);
 
-    if (!realMatch) {
-      // Knockout placeholder — only remember its round + date.
-      knockoutDates[knockoutRound(names)].push(ev.date);
-      continue;
-    }
+    if (!homeReal || !awayReal) continue; // placeholder — dates already collected
 
     const home = homeC.team.abbreviation;
     const away = awayC.team.abbreviation;
     const completed = ev.status?.type?.completed === true;
     const probs = oddsProbs(ev);
 
-    if (completed) {
-      const hs = Number(homeC.score);
-      const as = Number(awayC.score);
-      let homePts: number, awayPts: number, scoreA: number;
-      if (homeC.winner === true || (!awayC.winner && hs > as)) {
-        homePts = 3; awayPts = 0; scoreA = 1;
-      } else if (awayC.winner === true || as > hs) {
-        homePts = 0; awayPts = 3; scoreA = 0;
+    if (sameGroup(home, away)) {
+      // ---- Group stage match ----
+      if (completed) {
+        const hs = Number(homeC.score);
+        const as = Number(awayC.score);
+        let homePts: number, awayPts: number, scoreA: number;
+        if (homeC.winner === true || (!awayC.winner && hs > as)) {
+          homePts = 3; awayPts = 0; scoreA = 1;
+        } else if (awayC.winner === true || as > hs) {
+          homePts = 0; awayPts = 3; scoreA = 0;
+        } else {
+          homePts = 1; awayPts = 1; scoreA = 0.5;
+        }
+        updateElo(elo, home, away, scoreA);
+        groupMatches.push({ home, away, date: ev.date, completed: true, homePts, awayPts });
+        actualSoFar[home] = (actualSoFar[home] ?? 0) + homePts;
+        actualSoFar[away] = (actualSoFar[away] ?? 0) + awayPts;
+        const p = probs ?? eloToProbs(elo, home, away);
+        expectedSoFar[home] = (expectedSoFar[home] ?? 0) + 3 * p.homeWin + p.draw;
+        expectedSoFar[away] = (expectedSoFar[away] ?? 0) + 3 * p.awayWin + p.draw;
       } else {
-        homePts = 1; awayPts = 1; scoreA = 0.5;
+        const p = probs ?? eloToProbs(elo, home, away);
+        groupMatches.push({ home, away, date: ev.date, completed: false, probs: p });
       }
-      updateElo(elo, home, away, scoreA);
-      groupMatches.push({ home, away, date: ev.date, completed: true, homePts, awayPts });
-
-      actualSoFar[home] = (actualSoFar[home] ?? 0) + homePts;
-      actualSoFar[away] = (actualSoFar[away] ?? 0) + awayPts;
-      // Expected points the odds (or Elo) implied for this finished game.
-      const p = probs ?? eloToProbs(elo, home, away);
-      expectedSoFar[home] = (expectedSoFar[home] ?? 0) + 3 * p.homeWin + p.draw;
-      expectedSoFar[away] = (expectedSoFar[away] ?? 0) + 3 * p.awayWin + p.draw;
     } else {
-      const p = probs ?? eloToProbs(elo, home, away);
-      groupMatches.push({ home, away, date: ev.date, completed: false, probs: p });
+      // ---- Knockout match with real teams ----
+      const round = inferRound(ev.date);
+      if (completed) {
+        const hs = Number(homeC.score);
+        const as = Number(awayC.score);
+        let scoreA: number;
+        if (homeC.winner === true || hs > as) scoreA = 1;
+        else if (awayC.winner === true || as > hs) scoreA = 0;
+        else scoreA = 0.5;
+        const winner = homeC.winner === true ? home : away;
+        updateElo(elo, home, away, scoreA);
+        knockoutMatches.push({ home, away, round, completed: true, winner });
+        // Count knockout win points for the actual winner.
+        actualSoFar[winner] = (actualSoFar[winner] ?? 0) + 3;
+        const p = probs ?? eloToProbs(elo, home, away);
+        const expWinner = winner === home
+          ? 3 * p.homeWin + p.draw
+          : 3 * p.awayWin + p.draw;
+        expectedSoFar[winner] = (expectedSoFar[winner] ?? 0) + expWinner;
+      } else {
+        // Use ESPN odds if available; fall back to Elo.
+        const p = probs ?? eloToProbs(elo, home, away);
+        knockoutMatches.push({ home, away, round, completed: false, probs: p });
+      }
     }
   }
 
-  // Group the real teams into their groups (connected components of who plays
-  // whom in the group stage).
+  // Group the real teams into their groups (connected components of group-stage matches).
   const groups = deriveGroups(groupMatches);
 
   // ---- Monte Carlo --------------------------------------------------------
@@ -220,7 +295,7 @@ export function computeProjection(events: EspnEvent[]): Projection {
 
   for (let s = 0; s < SIMULATIONS; s++) {
     simulateOnce(
-      groups, groupMatches, elo,
+      groups, groupMatches, knockoutMatches, elo,
       totalPointsSum, gamesSum, roundPointsSum, qualifyCount, finishCount,
     );
   }
@@ -229,6 +304,8 @@ export function computeProjection(events: EspnEvent[]): Projection {
   const mean = (v: number) => v / N;
 
   // ---- team projections ---------------------------------------------------
+  const FINISH_ORDER: Finish[] = ["groups", "r32", "r16", "qf", "sf", "final", "champion"];
+
   const teams: TeamProjection[] = codes
     .map((code) => {
       const owned = TEAM_BY_CODE[code];
@@ -236,10 +313,15 @@ export function computeProjection(events: EspnEvent[]): Projection {
       (Object.keys(finishCount[code]) as Finish[]).forEach((f) => {
         finishProbs[f] = finishCount[code][f] / N;
       });
-      const expectedFinish = (Object.keys(finishProbs) as Finish[]).reduce(
-        (best, f) => (finishProbs[f] > finishProbs[best] ? f : best),
-        "groups" as Finish,
-      );
+      // Use median finish (50th percentile) — more representative than mode for strong teams.
+      const expectedFinish = (() => {
+        let cum = 0;
+        for (const f of FINISH_ORDER) {
+          cum += finishProbs[f];
+          if (cum >= 0.5) return f;
+        }
+        return "champion" as Finish;
+      })();
       const ps = actualSoFar[code] ?? 0;
       const es = expectedSoFar[code] ?? 0;
       return {
@@ -279,7 +361,6 @@ export function computeProjection(events: EspnEvent[]): Projection {
   }).sort(
     (a, b) => b.expectedPpg - a.expectedPpg || b.expectedPoints - a.expectedPoints,
   );
-  // Assign ranks, letting ties share a rank.
   players.forEach((p, i) => {
     p.rank =
       i === 0 ? 1 : players[i - 1].expectedPpg === p.expectedPpg ? players[i - 1].rank : i + 1;
@@ -301,6 +382,7 @@ export function computeProjection(events: EspnEvent[]): Projection {
 function simulateOnce(
   groups: string[][],
   groupMatches: GroupMatch[],
+  knockoutMatches: KnockoutMatch[],
   baseElo: Record<string, number>,
   totalPointsSum: Record<string, number>,
   gamesSum: Record<string, number>,
@@ -338,52 +420,91 @@ function simulateOnce(
     qualifiers.push(ranked[0], ranked[1]);
     if (ranked[2] != null) thirds.push(ranked[2]);
   }
-  // 8 best 3rd-placed teams.
   thirds.sort((a, b) => pts[b] - pts[a] || baseElo[b] - baseElo[a]);
   qualifiers.push(...thirds.slice(0, 8));
 
   for (const c of qualifiers) qualifyCount[c] += 1;
 
-  // Knockout: seed by Elo and run a re-seeded single-elimination bracket.
-  let alive = [...qualifiers].sort((a, b) => baseElo[b] - baseElo[a]);
-  const reachedKO = new Set(qualifiers);
-
+  // Knockout rounds: use real ESPN odds for known matchups, Elo for the rest.
+  const alive = new Set(qualifiers);
   const bracketRounds = ["r32", "r16", "qf", "sf"] as const;
   let semiLosers: string[] = [];
+
   for (const round of bracketRounds) {
-    const winners: string[] = [];
-    const losers: string[] = [];
-    for (let i = 0, j = alive.length - 1; i < j; i++, j--) {
-      const a = alive[i];
-      const b = alive[j];
-      games[a] += 1; games[b] += 1;
+    const roundLosers: string[] = [];
+    const handledTeams = new Set<string>();
+
+    // Apply known matchups first (completed or with real odds).
+    for (const m of knockoutMatches) {
+      if (m.round !== round) continue;
+      if (!alive.has(m.home) || !alive.has(m.away)) continue;
+
+      games[m.home] = (games[m.home] ?? 0) + 1;
+      games[m.away] = (games[m.away] ?? 0) + 1;
+
+      let winner: string, loser: string;
+      if (m.completed) {
+        winner = m.winner!;
+        loser = winner === m.home ? m.away : m.home;
+      } else {
+        // Real odds from ESPN; no draws in knockout — normalise to win/loss.
+        const p = m.probs!;
+        const homeWinProb = p.homeWin / (p.homeWin + p.awayWin);
+        if (Math.random() < homeWinProb) {
+          winner = m.home; loser = m.away;
+        } else {
+          winner = m.away; loser = m.home;
+        }
+      }
+
+      pts[winner] += 3;
+      roundPointsSum[round][winner] += 3;
+      finishCount[loser][round as Finish] += 1;
+      alive.delete(loser);
+      handledTeams.add(m.home);
+      handledTeams.add(m.away);
+      roundLosers.push(loser);
+    }
+
+    // Elo-seed the remaining teams whose matchups aren't known yet.
+    const remaining = [...alive]
+      .filter((t) => !handledTeams.has(t))
+      .sort((a, b) => baseElo[b] - baseElo[a]);
+
+    for (let i = 0, j = remaining.length - 1; i < j; i++, j--) {
+      const a = remaining[i];
+      const b = remaining[j];
+      games[a] = (games[a] ?? 0) + 1;
+      games[b] = (games[b] ?? 0) + 1;
       const aWins = Math.random() < eloExpected(baseElo[a], baseElo[b]);
       const w = aWins ? a : b;
       const l = aWins ? b : a;
       pts[w] += 3;
       roundPointsSum[round][w] += 3;
-      winners.push(w);
-      losers.push(l);
+      finishCount[l][round as Finish] += 1;
+      alive.delete(l);
+      roundLosers.push(l);
     }
-    if (round === "sf") semiLosers = losers;
-    // Record the finish bucket for everyone knocked out this round.
-    for (const l of losers) finishCount[l][round] += 1;
-    alive = winners.sort((a, b) => baseElo[b] - baseElo[a]);
+
+    if (round === "sf") semiLosers = roundLosers;
   }
 
   // Third-place match between the two semifinal losers.
   if (semiLosers.length === 2) {
     const [a, b] = semiLosers;
-    games[a] += 1; games[b] += 1;
+    games[a] = (games[a] ?? 0) + 1;
+    games[b] = (games[b] ?? 0) + 1;
     const aWins = Math.random() < eloExpected(baseElo[a], baseElo[b]);
     pts[aWins ? a : b] += 3;
     roundPointsSum.third[aWins ? a : b] += 3;
   }
 
   // Final between the two remaining teams.
-  if (alive.length === 2) {
-    const [a, b] = alive;
-    games[a] += 1; games[b] += 1;
+  const finalists = [...alive];
+  if (finalists.length === 2) {
+    const [a, b] = finalists;
+    games[a] = (games[a] ?? 0) + 1;
+    games[b] = (games[b] ?? 0) + 1;
     const aWins = Math.random() < eloExpected(baseElo[a], baseElo[b]);
     const champ = aWins ? a : b;
     const runner = aWins ? b : a;
@@ -395,7 +516,7 @@ function simulateOnce(
 
   // Teams that never qualified finish in the group stage.
   for (const g of groups) for (const c of g) {
-    if (!reachedKO.has(c)) finishCount[c].groups += 1;
+    if (!qualifiers.includes(c)) finishCount[c].groups += 1;
     totalPointsSum[c] += pts[c];
     gamesSum[c] += games[c];
   }

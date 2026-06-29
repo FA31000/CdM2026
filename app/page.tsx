@@ -6,16 +6,14 @@ import { Leaderboard } from "@/components/Leaderboard";
 import { Matches } from "@/components/Matches";
 import { Players } from "@/components/Players";
 import { Projection } from "@/components/Projection";
-import { Brackets } from "@/components/Brackets";
 import { formatUpdated } from "@/lib/ui";
 
-type Tab = "classement" | "matchs" | "joueurs" | "tableau" | "projection";
+type Tab = "classement" | "matchs" | "joueurs" | "projection";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "classement", label: "Classement" },
   { id: "matchs", label: "Matchs" },
   { id: "joueurs", label: "Joueurs" },
-  { id: "tableau", label: "🏆 Tableau" },
   { id: "projection", label: "📈 Projection" },
 ];
 
@@ -81,7 +79,6 @@ export default function Home() {
         {data && tab === "joueurs" && (
           <Players players={data.players} teams={data.teams} matches={data.matches} />
         )}
-        {data && tab === "tableau" && <Brackets matches={data.matches} />}
         {tab === "projection" && <Projection />}
       </div>
     </main>
