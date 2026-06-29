@@ -19,50 +19,64 @@ const ROUND_SHORT: Record<string, string> = {
   "Finale": "Finale",
 };
 
-// Card height must be exact so absolute positioning aligns correctly.
 const CARD_H = 78;
 const GAP = 8;
 const SLOT = CARD_H + GAP;
 
-// Each match gets a "centerSlot" — its vertical center expressed in slot units.
-// R32[0] → 0.5, R32[1] → 1.5, etc.  Total height = numR32Slots * SLOT.
 type Positioned = { match: Match; centerSlot: number };
 
-// Parse an ESPN placeholder label (e.g. "Round of 32 3 Winner") to extract the
-// 1-indexed match number for a given previous round.
+// Parse ESPN placeholder names like "Round of 32 3 Winner" → 3
 function extractPrevMatchNum(label: string, prevRoundFr: string): number | null {
-  const byRound: Record<string, RegExp[]> = {
-    "Seizième de finale": [/round[\s-]of[\s-]32\D*?(\d+)/i],
-    "Huitième de finale": [/round[\s-]of[\s-]16\D*?(\d+)/i],
-    "Quart de finale":    [/quarter[\s-]?final\D*?(\d+)/i],
-    "Demi-finale":        [/semi[\s-]?final\D*?(\d+)/i],
+  const patterns: Record<string, RegExp> = {
+    "Seizième de finale": /round[\s-]of[\s-]32\D*?(\d+)/i,
+    "Huitième de finale": /round[\s-]of[\s-]16\D*?(\d+)/i,
+    "Quart de finale":    /quarter[\s-]?final\D*?(\d+)/i,
+    "Demi-finale":        /semi[\s-]?final\D*?(\d+)/i,
   };
-  for (const re of byRound[prevRoundFr] ?? []) {
-    const m = label.match(re);
-    if (m) return parseInt(m[1], 10);
-  }
-  return null;
+  const re = patterns[prevRoundFr];
+  if (!re) return null;
+  const m = label.match(re);
+  return m ? parseInt(m[1], 10) : null;
 }
 
-// Given a match side, find the centerSlot of the previous-round match that feeds
-// into this slot — either by parsing the ESPN placeholder name, or by finding a
-// real team in the previous round.
-function getPrevCenterSlot(
-  side: MatchSide,
+// Reorder prevRoundMatches so each consecutive pair [2i, 2i+1] feeds nextRound[i].
+// This is necessary because FIFA 2026 uses cross-bracket seeding — match 1 plays
+// match 3 in R16, not match 2 — so chronological or event-ID order is wrong.
+function reorderByNextRound(
+  prevSorted: Match[],
+  nextSorted: Match[],
   prevRoundFr: string,
-  prev: Positioned[],
-  fallback: number,
-): number {
-  const num = extractPrevMatchNum(side.label, prevRoundFr);
-  if (num !== null && num >= 1 && num <= prev.length) {
-    return prev[num - 1].centerSlot;
+): Match[] {
+  const reordered: Match[] = [];
+  const placed = new Set<string>();
+
+  const addSide = (side: MatchSide) => {
+    const num = extractPrevMatchNum(side.label, prevRoundFr);
+    let found: Match | undefined;
+    if (num !== null && num >= 1 && num <= prevSorted.length) {
+      found = prevSorted[num - 1];
+    } else {
+      // Real team (match already played): find by team code
+      found = prevSorted.find(
+        (m) => m.home.code === side.code || m.away.code === side.code,
+      );
+    }
+    if (found && !placed.has(found.id)) {
+      reordered.push(found);
+      placed.add(found.id);
+    }
+  };
+
+  for (const nextMatch of nextSorted) {
+    addSide(nextMatch.home);
+    addSide(nextMatch.away);
   }
-  // Real team (match already played): find it in the previous round
-  const found = prev.find(
-    (p) => p.match.home.code === side.code || p.match.away.code === side.code,
-  );
-  if (found) return found.centerSlot;
-  return fallback + 0.5; // sequential fallback
+  // Append anything not yet referenced (safety net)
+  for (const m of prevSorted) {
+    if (!placed.has(m.id)) reordered.push(m);
+  }
+
+  return reordered;
 }
 
 type Props = { matches: Match[] };
@@ -77,8 +91,7 @@ export function Brackets({ matches }: Props) {
     if (!byRound[m.round]) byRound[m.round] = [];
     byRound[m.round].push(m);
   }
-  // Sort by ESPN event ID — this is the bracket order ESPN assigns (match 1, 2, ..., 16)
-  // which is NOT the same as chronological schedule order.
+  // Base sort by ESPN event ID (this gives ESPN's internal match numbering 1..N)
   for (const r of Object.values(byRound)) {
     r.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
   }
@@ -93,29 +106,38 @@ export function Brackets({ matches }: Props) {
     );
   }
 
-  // Compute vertical centerSlot for every match in every round.
-  const positionedByRound: Record<string, Positioned[]> = {};
+  // Reorder each round so adjacent pairs feed the same next-round match.
+  // We process left-to-right: R32 is reordered using R16 pairings, R16 using QF, etc.
+  const ordered: Record<string, Match[]> = {};
+  for (let i = 0; i < rounds.length; i++) {
+    const cur = rounds[i];
+    const next = rounds[i + 1];
+    if (next) {
+      ordered[cur] = reorderByNextRound(byRound[cur], byRound[next], cur);
+    } else {
+      ordered[cur] = byRound[cur]; // Final: no reordering needed
+    }
+  }
 
+  // Position matches. Pairs are now adjacent so sequential math is exact.
+  const positionedByRound: Record<string, Positioned[]> = {};
   for (let ri = 0; ri < rounds.length; ri++) {
     const round = rounds[ri];
-    const ms = byRound[round];
-
+    const ms = ordered[round];
     if (ri === 0) {
       positionedByRound[round] = ms.map((m, i) => ({ match: m, centerSlot: i + 0.5 }));
     } else {
-      const prevRound = rounds[ri - 1];
-      const prev = positionedByRound[prevRound];
+      const prev = positionedByRound[rounds[ri - 1]];
       positionedByRound[round] = ms.map((m, i) => {
-        const cs1 = getPrevCenterSlot(m.home, prevRound, prev, i * 2);
-        const cs2 = getPrevCenterSlot(m.away, prevRound, prev, i * 2 + 1);
-        return { match: m, centerSlot: (cs1 + cs2) / 2 };
+        const c1 = prev[i * 2]?.centerSlot ?? i * 2 + 0.5;
+        const c2 = prev[i * 2 + 1]?.centerSlot ?? i * 2 + 1.5;
+        return { match: m, centerSlot: (c1 + c2) / 2 };
       });
     }
   }
 
-  // Total height: first round count × 2^(its index in ROUND_ORDER) slots
   const firstRoundIdx = ROUND_ORDER.indexOf(rounds[0]);
-  const firstCount = byRound[rounds[0]].length;
+  const firstCount = ordered[rounds[0]].length;
   const totalSlots = firstCount * Math.pow(2, firstRoundIdx);
   const totalH = totalSlots * SLOT;
 
