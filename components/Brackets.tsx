@@ -25,43 +25,62 @@ const SLOT = CARD_H + GAP;
 
 type Positioned = { match: Match; centerSlot: number };
 
-// Parse ESPN placeholder names like "Round of 32 3 Winner" → 3
-function extractPrevMatchNum(label: string, prevRoundFr: string): number | null {
-  const patterns: Record<string, RegExp> = {
-    "Seizième de finale": /round[\s-]of[\s-]32\D*?(\d+)/i,
-    "Huitième de finale": /round[\s-]of[\s-]16\D*?(\d+)/i,
-    "Quart de finale":    /quarter[\s-]?final\D*?(\d+)/i,
-    "Demi-finale":        /semi[\s-]?final\D*?(\d+)/i,
-  };
-  const re = patterns[prevRoundFr];
-  if (!re) return null;
-  const m = label.match(re);
-  return m ? parseInt(m[1], 10) : null;
+// Official FIFA 2026 bracket draw order.
+// Each pair feeds the same R16 slot: rows [0,1] → R16[0], [2,3] → R16[1], etc.
+// Left side (rows 0-7), then right side (rows 8-15).
+const BRACKET_R32_ORDER: [string, string][] = [
+  ["GER", "PAR"],
+  ["FRA", "SWE"],
+  ["RSA", "CAN"],
+  ["NED", "MAR"],
+  ["POR", "CRO"],
+  ["ESP", "AUT"],
+  ["USA", "BIH"],
+  ["BEL", "SEN"],
+  ["BRA", "JPN"],
+  ["CIV", "NOR"],
+  ["MEX", "ECU"],
+  ["ENG", "COD"],
+  ["ARG", "CPV"],
+  ["AUS", "EGY"],
+  ["SUI", "ALG"],
+  ["COL", "GHA"],
+];
+
+function sortR32ByBracket(matches: Match[]): Match[] {
+  const result: Match[] = [];
+  const used = new Set<string>();
+  for (const [a, b] of BRACKET_R32_ORDER) {
+    const found = matches.find(
+      (m) =>
+        !used.has(m.id) &&
+        (m.home.code === a || m.away.code === a) &&
+        (m.home.code === b || m.away.code === b),
+    );
+    if (found) {
+      result.push(found);
+      used.add(found.id);
+    }
+  }
+  for (const m of matches) {
+    if (!used.has(m.id)) result.push(m);
+  }
+  return result;
 }
 
-// Reorder prevRoundMatches so each consecutive pair [2i, 2i+1] feeds nextRound[i].
-// This is necessary because FIFA 2026 uses cross-bracket seeding — match 1 plays
-// match 3 in R16, not match 2 — so chronological or event-ID order is wrong.
-function reorderByNextRound(
-  prevSorted: Match[],
-  nextSorted: Match[],
-  prevRoundFr: string,
-): Match[] {
+// Reorder prevRound so consecutive pairs [2i, 2i+1] feed nextRound[i].
+// Used for R16 → QF → SF → Final once real team names are available.
+function reorderByNextRound(prevSorted: Match[], nextSorted: Match[]): Match[] {
   const reordered: Match[] = [];
   const placed = new Set<string>();
 
   const addSide = (side: MatchSide) => {
-    const num = extractPrevMatchNum(side.label, prevRoundFr);
-    let found: Match | undefined;
-    if (num !== null && num >= 1 && num <= prevSorted.length) {
-      found = prevSorted[num - 1];
-    } else {
-      // Real team (match already played): find by team code
-      found = prevSorted.find(
-        (m) => m.home.code === side.code || m.away.code === side.code,
-      );
-    }
-    if (found && !placed.has(found.id)) {
+    const found = prevSorted.find(
+      (m) =>
+        !placed.has(m.id) &&
+        (m.home.code === side.code || m.away.code === side.code),
+    );
+    if (found) {
       reordered.push(found);
       placed.add(found.id);
     }
@@ -71,11 +90,9 @@ function reorderByNextRound(
     addSide(nextMatch.home);
     addSide(nextMatch.away);
   }
-  // Append anything not yet referenced (safety net)
   for (const m of prevSorted) {
     if (!placed.has(m.id)) reordered.push(m);
   }
-
   return reordered;
 }
 
@@ -106,16 +123,19 @@ export function Brackets({ matches }: Props) {
     );
   }
 
-  // Reorder each round so adjacent pairs feed the same next-round match.
-  // We process left-to-right: R32 is reordered using R16 pairings, R16 using QF, etc.
+  // Order each round so adjacent pairs feed the same next-round slot.
+  // R32: use the official FIFA bracket draw order (hardcoded).
+  // Later rounds: sort by team code lookup against the next round.
   const ordered: Record<string, Match[]> = {};
   for (let i = 0; i < rounds.length; i++) {
     const cur = rounds[i];
     const next = rounds[i + 1];
-    if (next) {
-      ordered[cur] = reorderByNextRound(byRound[cur], byRound[next], cur);
+    if (cur === "Seizième de finale") {
+      ordered[cur] = sortR32ByBracket(byRound[cur]);
+    } else if (next) {
+      ordered[cur] = reorderByNextRound(byRound[cur], byRound[next]);
     } else {
-      ordered[cur] = byRound[cur]; // Final: no reordering needed
+      ordered[cur] = byRound[cur];
     }
   }
 
